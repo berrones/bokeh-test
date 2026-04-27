@@ -7,7 +7,7 @@ CSV, or API-backed data source before using it for operational reporting.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 import random
 
 from bokeh.io import curdoc
@@ -21,6 +21,7 @@ from bokeh.models import (
     InlineStyleSheet,
     NumeralTickFormatter,
     NumberFormatter,
+    Range1d,
     Select,
     Span,
     TableColumn,
@@ -315,6 +316,8 @@ summary_div = Div(sizing_mode="stretch_width")
 trend_plot = figure(
     title="Monthly performance trend",
     x_axis_type="datetime",
+    x_range=Range1d(MONTHS[0] - timedelta(days=15), MONTHS[-1] + timedelta(days=20)),
+    y_range=Range1d(0.55, 1.0),
     height=330,
     sizing_mode="stretch_width",
     tools="pan,wheel_zoom,box_zoom,reset,save",
@@ -325,8 +328,6 @@ trend_plot.line("month", "rate", source=trend_source, line_width=4, color=ACCENT
 trend_plot.scatter("month", "rate", source=trend_source, size=10, fill_color=ACCENT_CYAN, line_color=TEXT_PRIMARY)
 trend_plot.line("month", "target", source=trend_source, line_width=2, color=ACCENT_ORANGE, line_dash="dashed", legend_label="Target")
 trend_plot.yaxis.axis_label = "Rate"
-trend_plot.y_range.start = 0.55
-trend_plot.y_range.end = 1.0
 trend_plot.legend.location = "bottom_right"
 trend_plot.legend.background_fill_color = PANEL_BG
 trend_plot.legend.background_fill_alpha = 0.9
@@ -348,6 +349,7 @@ style_plot(trend_plot)
 bar_plot = figure(
     title="Hospital comparison",
     x_range=HOSPITALS[1:],
+    y_range=Range1d(0.55, 1.0),
     height=330,
     sizing_mode="stretch_width",
     tools="pan,wheel_zoom,box_zoom,reset,save",
@@ -363,8 +365,6 @@ bar_plot.vbar(
     line_width=2,
 )
 bar_plot.yaxis.axis_label = "Rate"
-bar_plot.y_range.start = 0.55
-bar_plot.y_range.end = 1.0
 bar_plot.xaxis.major_label_orientation = 0.35
 bar_plot.add_tools(
     HoverTool(
@@ -394,6 +394,7 @@ metric_table = DataTable(
     sizing_mode="stretch_width",
     index_position=None,
     css_classes=["metric-table"],
+    reorderable=False,
 )
 
 header = Div(
