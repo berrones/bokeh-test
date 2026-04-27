@@ -7,7 +7,7 @@ CSV, or API-backed data source before using it for operational reporting.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import random
 
 from bokeh.io import curdoc
@@ -85,6 +85,8 @@ METRICS = [
 METRIC_BY_KEY = {metric.key: metric for metric in METRICS}
 HOSPITALS = ["All Hospitals", "North Medical Center", "Central Stroke Institute", "East Valley Hospital"]
 MONTHS = [date(2025, month, 1) for month in range(1, 13)]
+TREND_RANGE_START = datetime.combine(MONTHS[0] - timedelta(days=15), datetime.min.time())
+TREND_RANGE_END = datetime.combine(MONTHS[-1] + timedelta(days=20), datetime.min.time())
 
 PANEL_BG = "#0f172a"
 TEXT_PRIMARY = "#f8fafc"
@@ -316,7 +318,7 @@ summary_div = Div(sizing_mode="stretch_width")
 trend_plot = figure(
     title="Monthly performance trend",
     x_axis_type="datetime",
-    x_range=Range1d(MONTHS[0] - timedelta(days=15), MONTHS[-1] + timedelta(days=20)),
+    x_range=Range1d(TREND_RANGE_START, TREND_RANGE_END),
     y_range=Range1d(0.55, 1.0),
     height=330,
     sizing_mode="stretch_width",
