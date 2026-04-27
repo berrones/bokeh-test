@@ -9,16 +9,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 import random
-from statistics import mean
 
 from bokeh.io import curdoc
 from bokeh.layouts import column, row
 from bokeh.models import (
     ColumnDataSource,
     DataTable,
+    DatetimeTickFormatter,
     Div,
     HoverTool,
     InlineStyleSheet,
+    NumeralTickFormatter,
     NumberFormatter,
     Select,
     Span,
@@ -84,9 +85,29 @@ METRIC_BY_KEY = {metric.key: metric for metric in METRICS}
 HOSPITALS = ["All Hospitals", "North Medical Center", "Central Stroke Institute", "East Valley Hospital"]
 MONTHS = [date(2025, month, 1) for month in range(1, 13)]
 
+PANEL_BG = "#0f172a"
+TEXT_PRIMARY = "#f8fafc"
+TEXT_MUTED = "#94a3b8"
+GRID_LINE = "#24324a"
+EDGE_LINE = "#334155"
+ACCENT_CYAN = "#22d3ee"
+ACCENT_ORANGE = "#f97316"
+ACCENT_LIME = "#a3e635"
+ACCENT_ROSE = "#fb7185"
+
 
 def pct(value: float) -> str:
     return f"{value * 100:.1f}%"
+
+
+def performance_status(gap: float) -> tuple[str, str]:
+    if gap >= 0.03:
+        return "Ahead of target", "good"
+    if gap >= 0:
+        return "On target", "good"
+    if gap >= -0.02:
+        return "Watch closely", "watch"
+    return "Needs intervention", "alert"
 
 
 def build_demo_rows() -> list[dict[str, object]]:
@@ -195,23 +216,26 @@ def metric_table_rows(hospital: str) -> list[dict[str, object]]:
 
 
 def build_kpi_cards(metric: Metric, rows: list[dict[str, object]]) -> str:
+    monthly = aggregate_by_month(rows)
     numerator = sum(int(row["numerator"]) for row in rows)
     denominator = sum(int(row["denominator"]) for row in rows)
     rate = numerator / denominator if denominator else 0
-    latest_rows = [row for row in rows if row["month"] == MONTHS[-1]]
-    latest_rate = (
-        sum(int(row["numerator"]) for row in latest_rows) / sum(int(row["denominator"]) for row in latest_rows)
-        if latest_rows and sum(int(row["denominator"]) for row in latest_rows)
-        else 0
-    )
+    latest_rate = float(monthly[-1]["rate"]) if monthly else 0
+    previous_rate = float(monthly[-2]["rate"]) if len(monthly) > 1 else latest_rate
+    delta = latest_rate - previous_rate
+    best_month = max(monthly, key=lambda month: float(month["rate"])) if monthly else None
     gap = rate - metric.target
-    gap_class = "good" if gap >= 0 else "watch"
+    status_label, status_class = performance_status(gap)
+    gap_class = "good" if gap >= 0 else "alert"
     gap_label = f"{gap * 100:+.1f} pts"
+    delta_class = "good" if delta >= 0 else "alert"
+    delta_label = f"{delta * 100:+.1f} pts vs prior month"
 
     return f"""
     <div class="kpi-grid">
       <div class="kpi-card">
         <div class="kpi-label">Selected metric</div>
+        <div class="status-pill {status_class}">{status_label}</div>
         <div class="kpi-title">{metric.label}</div>
         <div class="kpi-note">{metric.description}</div>
       </div>
@@ -226,12 +250,53 @@ def build_kpi_cards(metric: Metric, rows: list[dict[str, object]]) -> str:
         <div class="kpi-note {gap_class}">{gap_label} versus target</div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label">Latest month</div>
+        <div class="kpi-label">Latest month momentum</div>
         <div class="kpi-value">{pct(latest_rate)}</div>
-        <div class="kpi-note">{MONTHS[-1].strftime('%B %Y')}</div>
+        <div class="kpi-note {delta_class}">{delta_label}</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Best month</div>
+        <div class="kpi-value">{pct(float(best_month["rate"]) if best_month else 0)}</div>
+        <div class="kpi-note">{best_month["month_label"] if best_month else "No data"}</div>
       </div>
     </div>
     """
+
+
+def style_plot(plot: figure) -> None:
+    plot.background_fill_color = PANEL_BG
+    plot.border_fill_color = PANEL_BG
+    plot.outline_line_color = EDGE_LINE
+    plot.min_border_left = 12
+    plot.min_border_right = 12
+    plot.min_border_top = 14
+    plot.min_border_bottom = 10
+    plot.toolbar.autohide = True
+    plot.toolbar.logo = None
+
+    plot.title.text_color = TEXT_PRIMARY
+    plot.title.text_font = "Trebuchet MS"
+    plot.title.text_font_size = "16pt"
+    plot.title.text_font_style = "bold"
+    plot.title.align = "left"
+
+    for grid in plot.grid:
+        grid.grid_line_color = GRID_LINE
+        grid.grid_line_alpha = 0.7
+        grid.minor_grid_line_color = None
+
+    for axis in [*plot.xaxis, *plot.yaxis]:
+        axis.axis_line_color = EDGE_LINE
+        axis.major_tick_line_color = EDGE_LINE
+        axis.minor_tick_line_color = None
+        axis.major_label_text_color = TEXT_MUTED
+        axis.major_label_text_font = "Avenir Next"
+        axis.major_label_text_font_size = "10pt"
+        axis.axis_label_text_color = TEXT_MUTED
+        axis.axis_label_text_font = "Avenir Next"
+        axis.axis_label_text_font_style = "bold"
+
+    plot.yaxis.formatter = NumeralTickFormatter(format="0%")
 
 
 metric_select = Select(
@@ -245,7 +310,7 @@ hospital_select = Select(title="Hospital", value="All Hospitals", options=HOSPIT
 trend_source = ColumnDataSource(data={})
 bar_source = ColumnDataSource(data={})
 table_source = ColumnDataSource(data={})
-summary_div = Div(width=1180)
+summary_div = Div(sizing_mode="stretch_width")
 
 trend_plot = figure(
     title="Monthly performance trend",
@@ -255,13 +320,19 @@ trend_plot = figure(
     tools="pan,wheel_zoom,box_zoom,reset,save",
     toolbar_location="above",
 )
-trend_plot.line("month", "rate", source=trend_source, line_width=3, color="#165a72", legend_label="Observed")
-trend_plot.scatter("month", "rate", source=trend_source, size=9, color="#165a72")
-trend_plot.line("month", "target", source=trend_source, line_width=2, color="#ba3b46", line_dash="dashed", legend_label="Target")
+trend_plot.varea(x="month", y1="rate", y2="target", source=trend_source, fill_color=ACCENT_CYAN, fill_alpha=0.10)
+trend_plot.line("month", "rate", source=trend_source, line_width=4, color=ACCENT_CYAN, legend_label="Observed")
+trend_plot.scatter("month", "rate", source=trend_source, size=10, fill_color=ACCENT_CYAN, line_color=TEXT_PRIMARY)
+trend_plot.line("month", "target", source=trend_source, line_width=2, color=ACCENT_ORANGE, line_dash="dashed", legend_label="Target")
 trend_plot.yaxis.axis_label = "Rate"
 trend_plot.y_range.start = 0.55
 trend_plot.y_range.end = 1.0
 trend_plot.legend.location = "bottom_right"
+trend_plot.legend.background_fill_color = PANEL_BG
+trend_plot.legend.background_fill_alpha = 0.9
+trend_plot.legend.label_text_color = TEXT_PRIMARY
+trend_plot.legend.border_line_color = EDGE_LINE
+trend_plot.xaxis.formatter = DatetimeTickFormatter(months="%b", years="%b %Y")
 trend_plot.add_tools(
     HoverTool(
         tooltips=[
@@ -272,6 +343,7 @@ trend_plot.add_tools(
         ]
     )
 )
+style_plot(trend_plot)
 
 bar_plot = figure(
     title="Hospital comparison",
@@ -281,7 +353,15 @@ bar_plot = figure(
     tools="pan,wheel_zoom,box_zoom,reset,save",
     toolbar_location="above",
 )
-bar_plot.vbar(x="hospital", top="rate", source=bar_source, width=0.62, color="#2a9d8f")
+bar_plot.vbar(
+    x="hospital",
+    top="rate",
+    source=bar_source,
+    width=0.62,
+    fill_color="color",
+    line_color="line_color",
+    line_width=2,
+)
 bar_plot.yaxis.axis_label = "Rate"
 bar_plot.y_range.start = 0.55
 bar_plot.y_range.end = 1.0
@@ -296,8 +376,9 @@ bar_plot.add_tools(
         ]
     )
 )
-target_span = Span(location=METRICS[0].target, dimension="width", line_color="#ba3b46", line_dash="dashed", line_width=2)
+target_span = Span(location=METRICS[0].target, dimension="width", line_color=ACCENT_ORANGE, line_dash="dashed", line_width=2)
 bar_plot.add_layout(target_span)
+style_plot(bar_plot)
 
 metric_table = DataTable(
     source=table_source,
@@ -312,6 +393,7 @@ metric_table = DataTable(
     height=275,
     sizing_mode="stretch_width",
     index_position=None,
+    css_classes=["metric-table"],
 )
 
 header = Div(
@@ -319,7 +401,7 @@ header = Div(
     <div class="hero">
       <div class="eyebrow">Synthetic demo dashboard</div>
       <h1>AHA Stroke Metrics</h1>
-      <p>Track core stroke quality measures across hospitals, compare performance to simple targets, and identify measures needing follow-up.</p>
+      <p>Monitor stroke quality performance with a darker command-center view, faster monthly trend reads, and immediate visibility into which measures are beating or missing target.</p>
     </div>
     """,
     sizing_mode="stretch_width",
@@ -336,70 +418,125 @@ footer = Div(
 
 APP_CSS = """
 :host {
-  --ink: #17313b;
-  --muted: #5f7279;
-  --paper: #f7f3eb;
-  --card: #fffdf8;
-  --teal: #165a72;
-  --red: #ba3b46;
-  --green: #2a9d8f;
-  --line: rgba(23, 49, 59, 0.14);
+  --bg: #050816;
+  --panel: #0f172a;
+  --panel-alt: #111c34;
+  --ink: #f8fafc;
+  --muted: #94a3b8;
+  --card: rgba(15, 23, 42, 0.9);
+  --cyan: #22d3ee;
+  --orange: #f97316;
+  --lime: #a3e635;
+  --rose: #fb7185;
+  --line: rgba(148, 163, 184, 0.18);
   display: block;
   color: var(--ink);
   background:
-    radial-gradient(circle at 16% 8%, rgba(42, 157, 143, 0.18), transparent 26rem),
-    linear-gradient(135deg, #f9f2e4 0%, #eef6f4 100%);
-  font-family: Georgia, 'Times New Roman', serif;
+    radial-gradient(circle at 12% 10%, rgba(34, 211, 238, 0.24), transparent 24rem),
+    radial-gradient(circle at 84% 4%, rgba(249, 115, 22, 0.20), transparent 18rem),
+    radial-gradient(circle at 70% 82%, rgba(251, 113, 133, 0.14), transparent 22rem),
+    linear-gradient(145deg, #050816 0%, #081122 45%, #0b1630 100%);
+  font-family: 'Avenir Next', 'Trebuchet MS', sans-serif;
   padding: 24px;
   box-sizing: border-box;
 }
 .hero {
   border: 1px solid var(--line);
   border-radius: 24px;
-  background: linear-gradient(135deg, rgba(255,253,248,0.96), rgba(242,248,246,0.88));
+  background:
+    linear-gradient(135deg, rgba(34, 211, 238, 0.12), transparent 42%),
+    linear-gradient(160deg, rgba(15, 23, 42, 0.96), rgba(17, 28, 52, 0.94));
   padding: 28px 32px;
-  box-shadow: 0 18px 45px rgba(23, 49, 59, 0.10);
+  box-shadow: 0 24px 60px rgba(2, 6, 23, 0.48);
+  position: relative;
+  overflow: hidden;
+}
+.hero::after {
+  content: "";
+  position: absolute;
+  inset: auto -6% -40% auto;
+  width: 22rem;
+  height: 22rem;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(249, 115, 22, 0.22), transparent 68%);
+  pointer-events: none;
 }
 .eyebrow {
-  color: var(--red);
-  font-family: Verdana, sans-serif;
+  color: var(--orange);
+  font-family: 'Avenir Next', sans-serif;
   font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
 }
 h1 {
   margin: 8px 0 6px;
   font-size: clamp(34px, 6vw, 62px);
-  line-height: 0.98;
+  line-height: 0.94;
+  letter-spacing: -0.03em;
 }
 p {
   color: var(--muted);
-  font-family: Verdana, sans-serif;
+  font-family: 'Avenir Next', sans-serif;
   font-size: 15px;
   max-width: 860px;
+}
+.bk-Row.controls-shell {
+  margin: 8px 0 4px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: rgba(15, 23, 42, 0.76);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
 }
 .kpi-grid {
   display: grid;
   gap: 14px;
-  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  grid-template-columns: repeat(5, minmax(160px, 1fr));
   margin: 8px 0 2px;
 }
 .kpi-card {
   min-height: 112px;
   border: 1px solid var(--line);
   border-radius: 18px;
-  background: var(--card);
+  background:
+    linear-gradient(180deg, rgba(17, 28, 52, 0.96), rgba(15, 23, 42, 0.92));
   padding: 18px;
-  box-shadow: 0 10px 28px rgba(23, 49, 59, 0.08);
+  box-shadow: 0 14px 36px rgba(2, 6, 23, 0.35);
 }
 .kpi-label {
   color: var(--muted);
-  font-family: Verdana, sans-serif;
+  font-family: 'Avenir Next', sans-serif;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 10px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.status-pill.good {
+  color: #d9f99d;
+  background: rgba(163, 230, 53, 0.14);
+  border: 1px solid rgba(163, 230, 53, 0.32);
+}
+.status-pill.watch {
+  color: #fde68a;
+  background: rgba(249, 115, 22, 0.14);
+  border: 1px solid rgba(249, 115, 22, 0.30);
+}
+.status-pill.alert {
+  color: #fecdd3;
+  background: rgba(251, 113, 133, 0.14);
+  border: 1px solid rgba(251, 113, 133, 0.30);
 }
 .kpi-title {
   margin-top: 9px;
@@ -408,22 +545,68 @@ p {
 }
 .kpi-value {
   margin-top: 8px;
-  color: var(--teal);
+  color: var(--cyan);
   font-size: 38px;
   line-height: 1;
+  font-weight: 800;
 }
 .kpi-note {
   margin-top: 10px;
   color: var(--muted);
-  font-family: Verdana, sans-serif;
+  font-family: 'Avenir Next', sans-serif;
   font-size: 12px;
   line-height: 1.4;
 }
-.kpi-note.good { color: var(--green); font-weight: 700; }
-.kpi-note.watch { color: var(--red); font-weight: 700; }
+.kpi-note.good { color: var(--lime); font-weight: 700; }
+.kpi-note.watch { color: #fde68a; font-weight: 700; }
+.kpi-note.alert { color: var(--rose); font-weight: 700; }
+.bk-input,
+select.bk-input {
+  background: rgba(8, 17, 34, 0.92);
+  color: var(--ink);
+  border: 1px solid rgba(34, 211, 238, 0.20);
+  border-radius: 12px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+}
+.bk-input option {
+  background: #081122;
+  color: var(--ink);
+}
+.bk-input:focus,
+select.bk-input:focus {
+  outline: none;
+  border-color: rgba(34, 211, 238, 0.56);
+  box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.16);
+}
+.bk-input-group label,
+.bk-InputGroup label {
+  color: var(--muted);
+  font-family: 'Avenir Next', sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.metric-table .slick-header-columns {
+  background: #101a30 !important;
+  border-bottom: 1px solid var(--line) !important;
+}
+.metric-table .slick-header-column {
+  color: var(--muted) !important;
+  font-weight: 700 !important;
+}
+.metric-table .grid-canvas {
+  background: rgba(15, 23, 42, 0.74) !important;
+}
+.metric-table .slick-row {
+  background: transparent !important;
+}
+.metric-table .slick-cell {
+  color: var(--ink) !important;
+  border-color: rgba(148, 163, 184, 0.08) !important;
+}
 .footer {
   color: var(--muted);
-  font-family: Verdana, sans-serif;
+  font-family: 'Avenir Next', sans-serif;
   font-size: 12px;
   padding: 10px 0 22px;
 }
@@ -456,6 +639,8 @@ def update() -> None:
         "gap": [row["gap"] for row in hospitals],
         "numerator": [row["numerator"] for row in hospitals],
         "denominator": [row["denominator"] for row in hospitals],
+        "color": [ACCENT_CYAN if float(row["gap"]) >= 0 else ACCENT_ROSE for row in hospitals],
+        "line_color": [ACCENT_LIME if float(row["gap"]) >= 0 else ACCENT_ORANGE for row in hospitals],
     }
     table_rows = metric_table_rows(hospital_select.value)
     table_source.data = {
@@ -477,7 +662,7 @@ metric_select.on_change("value", lambda attr, old, new: update())
 hospital_select.on_change("value", lambda attr, old, new: update())
 update()
 
-controls = row(metric_select, hospital_select, sizing_mode="stretch_width")
+controls = row(metric_select, hospital_select, sizing_mode="stretch_width", css_classes=["controls-shell"])
 charts = row(trend_plot, bar_plot, sizing_mode="stretch_width")
 layout = column(header, controls, summary_div, charts, metric_table, footer, sizing_mode="stretch_width")
 layout.stylesheets = [InlineStyleSheet(css=APP_CSS)]
