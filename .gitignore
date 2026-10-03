@@ -5,3 +5,9 @@ __pycache__/
 .rsconnect-python/
 
 .codex
+.Rproj.user
+.positai
+
+.Rhistory
+.posit/
+bokeh-test.Rproj
