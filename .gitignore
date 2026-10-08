@@ -11,3 +11,7 @@ __pycache__/
 .Rhistory
 .posit/
 bokeh-test.Rproj
+
+
+# ssn -- ouch!
+ssn.txt
