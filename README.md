@@ -1,5 +1,6 @@
 # Hospital Catchment Map
 ## heading 2
+## heading 2
 A very simple Bokeh app: a hospital (red star) with drive-time rings and synthetic towns sized by stroke cases. Choose a catchment (15/30/45/60 min) to highlight the towns inside it.
 
 ```bash
