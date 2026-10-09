@@ -15,3 +15,6 @@ bokeh-test.Rproj
 
 # ssn -- ouch!
 ssn.txt
+
+# more removals
+api-token
